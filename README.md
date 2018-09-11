@@ -127,7 +127,7 @@ cd build/
 And then run the program:
 
 ```
-./intruder_detector
+./intruder-detector
 ```
 
 ## Running on the integrated GPU (optional)
