@@ -3,7 +3,7 @@ This is a web-based UI specifically designed to display the information that the
 This web browser UI is not real-time, but uses the information procesed by the application. Because of this, the UI should be started after the application has been stopped.
 
 ## Running the UI
-__Before__ running the following commands, make sure you are in the `UI/` folder, where the `index.html` file is.
+__Before running the following commands__, make sure you are in the `UI/` folder, where the `index.html` file is.
 
 Chrome*:
 ```
