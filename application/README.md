@@ -106,7 +106,7 @@ intruder: person
 intruder: bicycle
 intruder: car
 ```
-This video can be downloaded directly, via the `video_downloader` python script provided. The script works with both python2 and python3. Run the following command:
+This video can be downloaded directly, via the `video_downloader` python script provided in the top folder of this repository. The script works with both python2 and python3. Run the following command:
 ```
 python video_downloader.py
 ```
