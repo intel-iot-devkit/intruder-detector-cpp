@@ -1,15 +1,15 @@
 # Intruder Detector UI
-This is a web-based UI specifically designed to display the information that the Intruder-detector reference implementation processes.   
+This is a web-based UI specifically designed to display the information that the Store-traffic-monitor reference implementation processes.   
 This web browser UI is not real-time, but uses the information procesed by the application. Because of this, the UI should be started after the application has been stopped.
 
 ## Running the UI
-__Before running the following commands__, make sure you are in the `UI/` folder, where the `index.html` file is.
 
 Chrome*:
 ```
-google-chrome --user-data-dir=$HOME/.config/google-chrome/Store-traffic-monitor --new-window --allow-file-access-from-files --allow-file-access --allow-cross-origin-auth-prompt index.html
+google-chrome  --user-data-dir=$HOME/.config/google-chrome/Intruder-detector --new-window --allow-file-access-from-files --allow-file-access --allow-cross-origin-auth-prompt index.html
 ```
 Firefox*:
 ```
 firefox index.html
 ```
+**_Note:_** For Firefox*, if the alerts list does not appear on the right side of the browser window, click anywhere on video progress bar to trigger a refresh.

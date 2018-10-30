@@ -31,7 +31,7 @@
 
 using namespace std;
 
-static const string conf_targetDevice = "CPU";
+static string conf_targetDevice = "CPU";
 static string conf_modelPath;
 static string conf_binFilePath;
 static string conf_labelsFilePath;
@@ -39,10 +39,13 @@ static const string conf_file = "../resources/conf.txt";
 static const size_t conf_batchSize = 1;
 static const int conf_windowColumns = 5; // OpenCV windows per each row
 
+bool loopVideos = false;
+
 static const int conf_fourcc = CV_FOURCC('H','2','6','4');
 
-static const double conf_thresholdValue = 0.12;
+static const double conf_thresholdValue = 0.55;
 static const int conf_candidateConfidence = 3;
+static std::vector<std::string> acceptedDevices{"CPU", "GPU", "MYRIAD"};
 
 typedef struct {
 	char time[25];
@@ -71,10 +74,8 @@ public:
 	cv::VideoCapture vc;
 	cv::VideoWriter vw;
 
-#ifdef LOOP_VIDEO
 	int loopFrames = 0;
 	bool isCam = false;
-#endif
 
 	const string camName;
 	const string videoName;
@@ -105,9 +106,7 @@ public:
 		, camName(camName)
 		, videoName("../../UI/resources/videos/video" + to_string(number) + ".mp4") {
 			cv::namedWindow(camName);
-#ifdef LOOP_VIDEO
 			isCam = true;
-#endif
 		}
 
 	void init (int size)

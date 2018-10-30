@@ -26,6 +26,7 @@
 #include <iostream>
 #include <algorithm>
 #include <ctime>
+#include <chrono>
 
 #include "opencv2/opencv.hpp"
 #include "opencv2/photo/photo.hpp"
@@ -48,11 +49,92 @@ using namespace cv;
 using namespace InferenceEngine::details;
 using namespace InferenceEngine;
 
-void getModelPath (ifstream *file)
+void parseEnv()
 {
-	getline(*file, conf_modelPath);
-	getline(*file, conf_binFilePath);
-	getline(*file, conf_labelsFilePath);
+	if (const char* env_d = std::getenv("DEVICE"))
+	{
+		conf_targetDevice = std::string(env_d);
+	}
+
+	if (const char* env_d = std::getenv("LOOP"))
+	{
+		if(std::string(env_d) == "true")
+		{
+			loopVideos = true;
+		}
+	}
+
+	// if (const char* env_d = std::getenv("MODEL"))
+	// {
+	// 	conf_modelPath = std::string(env_d);
+	// 	int pos = conf_modelPath.rfind(".");
+	// 	conf_binFilePath = conf_modelPath.substr(0 , pos) + ".bin";
+	// }
+
+	// if (const char* env_d = std::getenv("LABELS"))
+	// {
+	// 	conf_labelsFilePath = std::string(env_d);
+	// }
+}
+
+void parseArgs (int argc, char **argv)
+{
+	bool model = false;
+	bool labels = false;
+
+	for (int i = 1; i < argc; i += 2)
+	{
+		if ("-m" == std::string(argv[i]) || "--model" == std::string(argv[i]))
+		{
+			conf_modelPath = std::string(argv[i + 1]);
+			int pos = conf_modelPath.rfind(".");
+			conf_binFilePath = conf_modelPath.substr(0 , pos) + ".bin";
+			model = true;
+		}
+		if ("-l" == std::string(argv[i]) || "--labels" == std::string(argv[i]))
+		{
+			conf_labelsFilePath = std::string(argv[i + 1]);
+			labels = true;
+		}
+		if ("-d" == std::string(argv[i]) || "--device" == std::string(argv[i]))
+		{
+			conf_targetDevice = std::string(argv[i + 1]);
+		}
+		if ("-lp" == std::string(argv[i]) || "--loop" == std::string(argv[i]))
+		{
+			if(std::string(argv[i + 1]) == "true")
+			{
+				loopVideos = true;
+			}
+			if(std::string(argv[i + 1]) == "false")
+			{
+				loopVideos = false;
+			}
+		}
+	}
+}
+
+void checkArgs(std::string &defaultDevice)
+{
+	if (conf_modelPath.empty())
+	{
+		std::cout << "You need to specify the path to the .xml file\n";
+		std::cout << "Use -m MODEL or --model MODEL\n";
+		exit(11);
+	}
+
+	if (conf_labelsFilePath.empty())
+	{
+		std::cout << "You need to specify the path to the labels file\n";
+		std::cout << "Use -l LABELS or --labels LABELS\n";
+		exit(12);
+	}
+
+	if (!(std::find(acceptedDevices.begin(), acceptedDevices.end(), conf_targetDevice) != acceptedDevices.end()))
+	{
+		std::cout << "Unsupported device " << conf_targetDevice << ". Defaulting to " << defaultDevice << std::endl;
+		conf_targetDevice = defaultDevice;
+	}
 }
 
 static InferenceEngine::InferenceEnginePluginPtr loadPlugin(
@@ -151,6 +233,20 @@ std::vector<VideoCap> getInput (std::ifstream *file, size_t width, size_t height
 	return streams;
 }
 
+int get_minFPS(std::vector<VideoCap> &vidCaps)
+{
+	int minFPS = 240;
+
+	
+	for(auto&& i : vidCaps)
+	{
+		minFPS = std::min(minFPS, (int)round(i.vc.get(CAP_PROP_FPS)));
+	}
+	
+
+	return minFPS;
+}
+
 void arrangeWindows(vector<VideoCap> *vidCaps, size_t width, size_t height)
 {
 	int spacer = 25;
@@ -240,6 +336,11 @@ void saveJSON(vector<event> events, VideoCap vcap)
 
 int main(int argc, char **argv) {
 
+	std::string defaultDevice = conf_targetDevice;
+	parseEnv();
+	parseArgs(argc, argv);
+	checkArgs(defaultDevice);
+
 	std::ifstream confFile(conf_file);
 	if (!confFile.is_open())
 	{
@@ -247,14 +348,10 @@ int main(int argc, char **argv) {
 		return 2;
 	}
 
-	getModelPath(&confFile);
-
 	/**
 	 * Inference engine initialization
 	 */
-	TargetDevice myTargetDevice =
-			(conf_targetDevice == "GPU") ?
-					TargetDevice::eGPU : TargetDevice::eCPU;
+	TargetDevice myTargetDevice = TargetDeviceInfo::fromStr(conf_targetDevice);
 
 	// NOTE: Load plugin first.
 	InferenceEngine::InferenceEnginePluginPtr p_plugin = loadPlugin(
@@ -402,6 +499,10 @@ int main(int argc, char **argv) {
 	int frames = 0;
 
 	int totalCount = 0;
+	std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
+
+	int minFPS = get_minFPS(vidCaps);
+	int waitTime = (int)(round(1000 / minFPS / vidCaps.size()));
 
 	/* Main loop starts here. */
 	for (;;) {
@@ -413,7 +514,12 @@ int main(int argc, char **argv) {
 				//---------------------------
 				// get a new frame
 				//---------------------------
-				vidCapObj.vc.read(frame);
+				int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
+				for (int i = 0; i < round(vfps / minFPS); ++i)
+				{
+					vidCapObj.vc.read(frame);
+					vidCapObj.loopFrames++;		
+				}
 
 				if (!frame.data) {
 					no_more_data = true;
@@ -464,12 +570,15 @@ int main(int argc, char **argv) {
 			//---------------------------
 			// INFER STAGE
 			//---------------------------
+			std::chrono::high_resolution_clock::time_point infer_start_time = std::chrono::high_resolution_clock::now();
 			sts = p_plugin->Infer(inputBlobs, outputBlobs, &dsc);
 			if (sts != 0) {
 				std::cout << "An infer error occurred: " << dsc.msg
 						<< std::endl;
 				return 1;
 			}
+			std::chrono::high_resolution_clock::time_point infer_stop_time = std::chrono::high_resolution_clock::now();
+			std::chrono::duration<float> infer_time = std::chrono::duration_cast<std::chrono::duration<float>>(infer_stop_time - infer_start_time);
 			//---------------------------
 			// POSTPROCESS STAGE:
 			// parse output
@@ -583,8 +692,17 @@ int main(int argc, char **argv) {
 					putText(logs, *it, Point(10, 15 + 20 * i), CV_FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 1, 8, false);
 					++i;
 				}
+				std::chrono::high_resolution_clock::time_point end_time = std::chrono::high_resolution_clock::now();
+				std::chrono::duration<float> frame_time = std::chrono::duration_cast<std::chrono::duration<float>>(end_time - start_time);
+				char vid_fps[20];
+				sprintf(vid_fps, "FPS: %.2f", 1 / frame_time.count());
+				cv::putText(output_frames[mb], string(vid_fps), cv::Point(10, output_height - 10), CV_FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1, 8, false);
+				char infTm[20];
+				sprintf(infTm, "Infer time: %.3f", infer_time.count());
+				cv::putText(output_frames[mb], string(infTm), cv::Point(10, output_height - 30), CV_FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1, 8, false);
 				cv::imshow(vidCapObj.camName, output_frames[mb]);
 				cv::imshow("Intruder Log", logs);
+				start_time = std::chrono::high_resolution_clock::now();
 
 				if (waitKey(1) == 27)
 				{
@@ -592,17 +710,16 @@ int main(int argc, char **argv) {
 					return 0;
 				}
 
-#ifdef LOOP_VIDEO
-				if (!vidCapObj.isCam)
+				if (loopVideos && !vidCapObj.isCam)
 				{
+					int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
 					vidCapObj.loopFrames++;
-					if (vidCapObj.loopFrames == vidCapObj.vc.get(CV_CAP_PROP_FRAME_COUNT))
+					if (vidCapObj.loopFrames > vidCapObj.vc.get(CV_CAP_PROP_FRAME_COUNT) - round(vfps / minFPS))
 					{
 						vidCapObj.loopFrames = 0;
 						vidCapObj.vc.set(CV_CAP_PROP_POS_FRAMES, 0);
 					}
 				}
-#endif
 			}
 		}
 
