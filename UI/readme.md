@@ -3,6 +3,7 @@ This is a web-based UI specifically designed to display the information that the
 This web browser UI is not real-time, but uses the information procesed by the application. Because of this, the UI should be started after the application has been stopped.
 
 ## Running the UI
+In the `UI` folder of the reference-implementation run the following commands.   
 
 Chrome*:
 ```
