@@ -1,6 +1,4 @@
 /*
- * Authors: Stefan Andritoiu <stefan.andritoiu@gmail.com>
- *          Serban Waltter <serban.waltter@rinftech.com>
  * Copyright (c) 2018 Intel Corporation.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -24,6 +22,7 @@
  */
 
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <ctime>
 #include <chrono>
@@ -49,38 +48,38 @@ using namespace cv;
 using namespace InferenceEngine::details;
 using namespace InferenceEngine;
 
+
+// Parse the environmental variables
 void parseEnv()
 {
-	if (const char* env_d = std::getenv("DEVICE"))
+	if (const char *env_d = std::getenv("DEVICE"))
 	{
 		conf_targetDevice = std::string(env_d);
 	}
 
-	if (const char* env_d = std::getenv("LOOP"))
+	if (const char *env_d = std::getenv("LOOP"))
 	{
-		if(std::string(env_d) == "true")
+		if (std::string(env_d) == "true")
 		{
 			loopVideos = true;
 		}
 	}
 
-	// if (const char* env_d = std::getenv("MODEL"))
-	// {
-	// 	conf_modelPath = std::string(env_d);
-	// 	int pos = conf_modelPath.rfind(".");
-	// 	conf_binFilePath = conf_modelPath.substr(0 , pos) + ".bin";
-	// }
-
-	// if (const char* env_d = std::getenv("LABELS"))
-	// {
-	// 	conf_labelsFilePath = std::string(env_d);
-	// }
 }
 
-void parseArgs (int argc, char **argv)
+
+// Parse the command line argument
+void parseArgs(int argc, char **argv)
 {
-	bool model = false;
-	bool labels = false;
+	if ("-h" == std::string(argv[1]) || "--help" == std::string(argv[1]))
+	{
+		std::cout << argv[0] << " -m MODEL -l LABELS [OPTIONS]\n\n"
+					"-m, --model	Path to .xml file containing model layers\n"
+					"-l, --labels	Path to labels file\n"
+					"-d, --device	Device to run the inference (CPU, GPU, MYRIAD, FPGA or HDDL only). Default option is CPU\n"
+					"-lp, --loop	Loop video to mimic continuous input\n";
+		exit(0);
+	}
 
 	for (int i = 1; i < argc; i += 2)
 	{
@@ -88,13 +87,11 @@ void parseArgs (int argc, char **argv)
 		{
 			conf_modelPath = std::string(argv[i + 1]);
 			int pos = conf_modelPath.rfind(".");
-			conf_binFilePath = conf_modelPath.substr(0 , pos) + ".bin";
-			model = true;
+			conf_binFilePath = conf_modelPath.substr(0, pos) + ".bin";
 		}
 		if ("-l" == std::string(argv[i]) || "--labels" == std::string(argv[i]))
 		{
 			conf_labelsFilePath = std::string(argv[i + 1]);
-			labels = true;
 		}
 		if ("-d" == std::string(argv[i]) || "--device" == std::string(argv[i]))
 		{
@@ -102,11 +99,11 @@ void parseArgs (int argc, char **argv)
 		}
 		if ("-lp" == std::string(argv[i]) || "--loop" == std::string(argv[i]))
 		{
-			if(std::string(argv[i + 1]) == "true")
+			if (std::string(argv[i + 1]) == "true")
 			{
 				loopVideos = true;
 			}
-			if(std::string(argv[i + 1]) == "false")
+			if (std::string(argv[i + 1]) == "false")
 			{
 				loopVideos = false;
 			}
@@ -114,7 +111,9 @@ void parseArgs (int argc, char **argv)
 	}
 }
 
-void checkArgs(std::string &defaultDevice)
+
+// Validate the command line arguments
+void checkArgs()
 {
 	if (conf_modelPath.empty())
 	{
@@ -130,57 +129,71 @@ void checkArgs(std::string &defaultDevice)
 		exit(12);
 	}
 
-	if (!(std::find(acceptedDevices.begin(), acceptedDevices.end(), conf_targetDevice) != acceptedDevices.end()))
+	if (conf_targetDevice.empty())
 	{
-		std::cout << "Unsupported device " << conf_targetDevice << ". Defaulting to " << defaultDevice << std::endl;
-		conf_targetDevice = defaultDevice;
+		conf_targetDevice = "CPU";
+	}
+	else if (!(std::find(acceptedDevices.begin(), acceptedDevices.end(), conf_targetDevice) != acceptedDevices.end()))
+	{
+		std::cout << "Unsupported device " << conf_targetDevice << std::endl;
+		exit(13);
 	}
 }
 
-static InferenceEngine::InferenceEnginePluginPtr loadPlugin(
-		TargetDevice myTargetDevice) {
-	InferenceEngine::PluginDispatcher dispatcher( { "" });
 
-	return static_cast<InferenceEngine::InferenceEnginePluginPtr>(dispatcher.getSuitablePlugin(
-			myTargetDevice));
+static InferenceEngine::InferenceEnginePluginPtr loadPlugin(TargetDevice myTargetDevice)
+{
+	InferenceEngine::PluginDispatcher dispatcher({""});
+
+	return static_cast<InferenceEngine::InferenceEnginePluginPtr>(dispatcher.getPluginByDevice(
+		conf_targetDevice));
 }
 
-static void configureNetwork(InferenceEngine::CNNNetReader &network,
-		TargetDevice myTargetDevice) {
-	try {
+
+static void configureNetwork(InferenceEngine::CNNNetReader &network, TargetDevice myTargetDevice)
+{
+	try
+	{
 		network.ReadNetwork(conf_modelPath);
-	} catch (InferenceEngineException ex) {
+	}
+	catch (InferenceEngineException ex)
+	{
 		std::cerr << "Failed to load network: " << std::endl;
 	}
 
 	network.ReadWeights(conf_binFilePath);
 
-	// set the target device
-	network.getNetwork().setTargetDevice(myTargetDevice);
-
 	// Set batch size
 	network.getNetwork().setBatchSize(conf_batchSize);
 }
 
-static std::vector<bool> getUsedLabels(std::vector<string> *reqLabels,  std::vector<int> *labelPos,  std::vector<string> *labelNames) {
+
+// Read the model's label file and get the position of labels required by the application
+static std::vector<bool> getUsedLabels(std::vector<string> *reqLabels, std::vector<int> *labelPos, std::vector<string> *labelNames)
+{
 	std::vector<bool> usedLabels;
 
 	std::ifstream labelsFile(conf_labelsFilePath);
 
-	if (!labelsFile.is_open()) {
+	if (!labelsFile.is_open())
+	{
 		std::cout << "Could not open labels file" << std::endl;
 		return usedLabels;
 	}
 
 	std::string label;
 	int i = 0;
-	while (getline(labelsFile, label)) {
-		if (std::find((*reqLabels).begin(), (*reqLabels).end(), label) != (*reqLabels).end()) {
+	while (getline(labelsFile, label))
+	{
+		if (std::find((*reqLabels).begin(), (*reqLabels).end(), label) != (*reqLabels).end())
+		{
 			usedLabels.push_back(true);
 			(*labelPos).push_back(i);
 			(*labelNames).push_back(label);
 			++i;
-		} else {
+		}
+		else
+		{
 			usedLabels.push_back(false);
 			(*labelPos).push_back(0);
 		}
@@ -192,8 +205,8 @@ static std::vector<bool> getUsedLabels(std::vector<string> *reqLabels,  std::vec
 }
 
 
-
-std::vector<VideoCap> getInput (std::ifstream *file, size_t width, size_t height, vector<string> *usedLabels)
+// Parse the configuration file conf.txt
+std::vector<VideoCap> getInput(std::ifstream *file, size_t width, size_t height, vector<string> *usedLabels)
 {
 	std::vector<VideoCap> streams;
 	std::string str;
@@ -208,18 +221,20 @@ std::vector<VideoCap> getInput (std::ifstream *file, size_t width, size_t height
 			++cams;
 			sprintf(camName, "Cam %d", cams);
 			std::string path = str.substr(delim + 2);
-			if (path.size() == 1 && *(path.c_str()) >= '0' && *(path.c_str()) <= '9')	// Get cam ID
+			if (path.size() == 1 && *(path.c_str()) >= '0' && *(path.c_str()) <= '9') // Get cam ID
 			{
-				streams.push_back(VideoCap(width, height,  0, camName, cams));
+				streams.push_back(VideoCap(width, height, 0, camName, cams));
 			}
-			else{
-				streams.push_back(VideoCap(width, height,  path, camName, cams));
+			else
+			{
+				streams.push_back(VideoCap(width, height, path, camName, cams));
 			}
 		}
 		else if (str.substr(0, delim) == string("intruder"))
 		{
 			(*usedLabels).push_back(str.substr(delim + 2));
-		} else
+		}
+		else
 		{
 			cout << "Unrecognized option; Ignoring\n";
 		}
@@ -233,64 +248,65 @@ std::vector<VideoCap> getInput (std::ifstream *file, size_t width, size_t height
 	return streams;
 }
 
+
+// Get the minimum fps of the videos
 int get_minFPS(std::vector<VideoCap> &vidCaps)
 {
 	int minFPS = 240;
 
-	
-	for(auto&& i : vidCaps)
+	for (auto &&i : vidCaps)
 	{
 		minFPS = std::min(minFPS, (int)round(i.vc.get(CAP_PROP_FPS)));
 	}
-	
 
 	return minFPS;
 }
 
+
+// Arranges the windows so that they are not overlapping
 void arrangeWindows(vector<VideoCap> *vidCaps, size_t width, size_t height)
 {
-	int spacer = 25;
+	int spacer = 470;
+	int rowSpacer = 250;
 	int cols = 0;
 	int rows = 0;
+
+	namedWindow("Intruder Log", WINDOW_AUTOSIZE);
+	moveWindow("Intruder Log", 0, 0);
+
 	for (int i = 0; i < (*vidCaps).size(); ++i)
 	{
+		namedWindow((*vidCaps)[i].camName, WINDOW_NORMAL);
+		resizeWindow((*vidCaps)[i].camName, displayWindowWidth, displayWindowHeight);
+
 		if (cols == conf_windowColumns)
 		{
-			cols = 0;
+			cols = 1;
 			++rows;
-			moveWindow((*vidCaps)[i].camName, (spacer + width) * cols, (spacer + height) * rows);
-			++cols;
+			moveWindow((*vidCaps)[i].camName, spacer * cols, rowSpacer * rows);
 		}
 		else
 		{
-			moveWindow((*vidCaps)[i].camName, (spacer + width) * cols, (spacer + height) * rows);
 			++cols;
+			moveWindow((*vidCaps)[i].camName, spacer * cols, rowSpacer * rows);
 		}
-	}
-	if (cols == conf_windowColumns)
-	{
-		cols = 0;
-		++rows;
-		moveWindow("Intruder Log", (spacer + width) * cols, (spacer + height) * rows);
-	}
-	else
-	{
-		moveWindow("Intruder Log", (spacer + width) * cols, (spacer + height) * rows);
 	}
 }
 
+
+// Write the video results to json files
 void saveJSON(vector<event> events, VideoCap vcap)
 {
 
 	ofstream evtJson("../../UI/resources/video_data/events.json");
-	if(!evtJson.is_open())
+	if (!evtJson.is_open())
 	{
 		cout << "Could not create JSON file" << endl;
 		return;
 	}
 
 	ofstream dataJson("../../UI/resources/video_data/data.json");
-	if(!dataJson.is_open())
+	if (!dataJson.is_open())
 	{
 		cout << "Could not create JSON file" << endl;
 		return;
@@ -300,7 +316,8 @@ void saveJSON(vector<event> events, VideoCap vcap)
 
 	evtJson << "{\n\t\"video1\": {\n";
 	dataJson << "{\n\t\"video1\": {\n";
-	if (!events.empty()){
+	if (!events.empty())
+	{
 		int fps = vcap.vc.get(cv::CAP_PROP_FPS);
 		int evts = static_cast<int>(events.size());
 		int i = 0;
@@ -334,12 +351,17 @@ void saveJSON(vector<event> events, VideoCap vcap)
 	dataJson << "}";
 }
 
-int main(int argc, char **argv) {
 
-	std::string defaultDevice = conf_targetDevice;
+
+int main(int argc, char **argv)
+{
+
+	int logWinHeight = 432;
+	int logWinWidth = 410;
+	std::vector<bool> noMoreData;
 	parseEnv();
 	parseArgs(argc, argv);
-	checkArgs(defaultDevice);
+	checkArgs();
 
 	std::ifstream confFile(conf_file);
 	if (!confFile.is_open())
@@ -348,35 +370,35 @@ int main(int argc, char **argv) {
 		return 2;
 	}
 
-	/**
-	 * Inference engine initialization
-	 */
+	// Inference engine initialization
+	// Set the Target Device
 	TargetDevice myTargetDevice = TargetDeviceInfo::fromStr(conf_targetDevice);
 
-	// NOTE: Load plugin first.
+	// Load the IE plugin for the target device
 	InferenceEngine::InferenceEnginePluginPtr p_plugin = loadPlugin(
-			myTargetDevice);
+		myTargetDevice);
 
-	// NOTE: Configure the network.
+	// Configure the network
 	InferenceEngine::CNNNetReader network;
 	configureNetwork(network, myTargetDevice);
 
-	// NOTE: set input configuration
+	// Set input configuration
 	InputsDataMap inputs;
-
 	inputs = network.getNetwork().getInputsInfo();
 
-	if (inputs.size() != 1) {
+	if (inputs.size() != 1)
+	{
 		std::cout << "This sample accepts networks having only one input."
-				<< std::endl;
+				  << std::endl;
 		return 1;
 	}
 
 	InferenceEngine::SizeVector inputDims = inputs.begin()->second->getDims();
 
-	if (inputDims.size() != 4) {
+	if (inputDims.size() != 4)
+	{
 		std::cout << "Not supported input dimensions size, expected 4, got "
-				<< inputDims.size() << std::endl;
+				  << inputDims.size() << std::endl;
 	}
 
 	std::string imageInputName = inputs.begin()->first;
@@ -385,37 +407,34 @@ int main(int argc, char **argv) {
 
 	// Allocate input blobs
 	InferenceEngine::BlobMap inputBlobs;
-	InferenceEngine::TBlob<float>::Ptr pInputBlobData =
-			InferenceEngine::make_shared_blob<float,
-					const InferenceEngine::SizeVector>(Precision::FP32, inputDims);
+	InferenceEngine::TBlob<float>::Ptr pInputBlobData = InferenceEngine::make_shared_blob<float,
+							   const InferenceEngine::SizeVector>(Precision::FP32, inputDims);
 	pInputBlobData->allocate();
-
 	inputBlobs[imageInputName] = pInputBlobData;
 
-	// Add CPU Extensions
+	// Add CPU Extension
 	InferencePlugin plugin(p_plugin);
-	if ((conf_targetDevice.find("CPU") != std::string::npos)) {
-	// Required for support of certain layers in CPU
+	if ((conf_targetDevice.find("CPU") != std::string::npos))
+	{
+		// Required for support of certain layers in CPU
 		plugin.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>());
 	}
 
 	// Load model into plugin
-
 	InferenceEngine::ResponseDesc dsc;
-
-	InferenceEngine::StatusCode sts = p_plugin->LoadNetwork(
-			network.getNetwork(), &dsc);
-	if (sts != 0) {
+	InferenceEngine::StatusCode sts = p_plugin->LoadNetwork(network.getNetwork(), &dsc);
+	if (sts != 0)
+	{
 		std::cout << "Error loading model into plugin: " << dsc.msg
-				<< std::endl;
+				  << std::endl;
 		return 1;
 	}
 
 	//  Inference engine output setup
 
-	// --------------------
+	// ----------------------
 	// get output dimensions
-	// --------------------
+	// ----------------------
 	InferenceEngine::OutputsDataMap outputsDataMap;
 	outputsDataMap = network.getNetwork().getOutputsInfo();
 	InferenceEngine::BlobMap outputBlobs;
@@ -424,147 +443,157 @@ int main(int argc, char **argv) {
 
 	int maxProposalCount = -1;
 
-	for (auto && item : outputsDataMap) {
+	for (auto &&item : outputsDataMap)
+	{
 		InferenceEngine::SizeVector outputDims = item.second->dims;
 
 		InferenceEngine::TBlob<float>::Ptr output;
-		output = InferenceEngine::make_shared_blob<float,
-				const InferenceEngine::SizeVector>(Precision::FP32, outputDims);
+		output = InferenceEngine::make_shared_blob<float, 
+						const InferenceEngine::SizeVector>(Precision::FP32, outputDims);
 		output->allocate();
-
 		outputBlobs[item.first] = output;
 		maxProposalCount = outputDims[1];
 	}
 
-	InferenceEngine::SizeVector outputDims =
-			outputBlobs.cbegin()->second->dims();
+	InferenceEngine::SizeVector outputDims = outputBlobs.cbegin()->second->dims();
 	size_t outputSize = outputBlobs.cbegin()->second->size() / conf_batchSize;
 
-	/* Video loading */
-	/* Create VideoCap objects for all cams. */
+	// Create VideoCap objects for all the videos and camera
 	std::vector<VideoCap> vidCaps;
-	/* Requested labels */
+	// Requested labels 
 	std::vector<string> reqLabels;
-
 	vidCaps = getInput(&confFile, inputDims[1], inputDims[0], &reqLabels);
 
-	const size_t input_width = vidCaps[0].vc.get(CV_CAP_PROP_FRAME_WIDTH);
-	const size_t input_height = vidCaps[0].vc.get(CV_CAP_PROP_FRAME_HEIGHT);
 	const size_t output_width = inputDims[1];
 	const size_t output_height = inputDims[0];
 
-	/* Initializing VideoWriter for each source */
+	// Initializing VideoWriter for each source 
 	for (auto &vidCapObj : vidCaps)
 	{
-		if(vidCapObj.initVW(output_height, output_width))
+		vidCapObj.inputWidth = vidCapObj.vc.get(cv::CAP_PROP_FRAME_WIDTH);
+		vidCapObj.inputHeight = vidCapObj.vc.get(cv::CAP_PROP_FRAME_HEIGHT);
+		if (!(vidCapObj.initVW(vidCapObj.inputHeight, vidCapObj.inputWidth)))
 		{
 			cout << "Could not open " << vidCapObj.videoName << " for writing\n";
 			return 4;
 		}
+		noMoreData.push_back(false);
 	}
 
-	namedWindow("Intruder Log", CV_WINDOW_AUTOSIZE);
 	Mat logs;
 	arrangeWindows(&vidCaps, output_width, output_height);
 
-	Mat frame, frameInfer;
-	Mat* output_frames = new Mat[conf_batchSize];
+	Mat frameInfer;
+	Mat *frame = new Mat[conf_batchSize];
+	Mat *output_frames = new Mat[conf_batchSize];
 
-	auto input_channels = inputDims[2];  // channels for color format.  RGB=4
+	auto input_channels = inputDims[2]; // Channels for color format, RGB=4
 	auto channel_size = output_width * output_height;
 	auto input_size = channel_size * input_channels;
-	bool no_more_data = false;
 
 	// Read class names
 	vector<int> labelPos; // used label position in labels file
 	vector<string> labelNames;
-	std::vector<bool> usedLabels = getUsedLabels(&reqLabels,  &labelPos,  &labelNames);
-	if (usedLabels.empty()) {
+	std::vector<bool> usedLabels = getUsedLabels(&reqLabels, &labelPos, &labelNames);
+	if (usedLabels.empty())
+	{
 		std::cout
-				<< "Error: No labels currently in use. Please edit conf.txt file"
-				<< std::endl;
+			<< "Error: No labels currently in use. Please edit conf.txt file"
+			<< std::endl;
 		return 1;
 	}
 
 	ofstream logFile("intruders.log");
-	if(!logFile.is_open())
+	if (!logFile.is_open())
 	{
 		cout << "Could not create log file\n";
 		return 3;
 	}
 
 	list<string> logList;
-	int rollingLogSize = (output_height - 15) / 20;
-	vector<event> events;
-	int frames = 0;
-
+	int rollingLogSize = (logWinHeight - 15) / 20;
+	int index = 0;
 	int totalCount = 0;
 	std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
 
 	int minFPS = get_minFPS(vidCaps);
 	int waitTime = (int)(round(1000 / minFPS / vidCaps.size()));
 
-	/* Main loop starts here. */
-	for (;;) {
-		for (auto &vidCapObj : vidCaps) {
-			for (size_t mb = 0; mb < conf_batchSize; mb++) {
-				float* inputPtr = pInputBlobData.get()->data()
-						+ input_size * mb;
+	// Main loop starts here
+	for (;;)
+	{
+		index = 0;
+		for (auto &vidCapObj : vidCaps)
+		{
+			for (size_t mb = 0; mb < conf_batchSize; mb++)
+			{
+				float *inputPtr = pInputBlobData.get()->data() + input_size * mb;
 
 				//---------------------------
-				// get a new frame
+				// Get a new frame
 				//---------------------------
 				int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
 				for (int i = 0; i < round(vfps / minFPS); ++i)
 				{
-					vidCapObj.vc.read(frame);
-					vidCapObj.loopFrames++;		
+					vidCapObj.vc.read(frame[mb]);
+					vidCapObj.loopFrames++;
 				}
 
-				if (!frame.data) {
-					no_more_data = true;
-					break;  //frame input ended
+				if (!frame[mb].data)
+				{
+					noMoreData[index] = true;
+					break;
 				}
 
-				//---------------------------
-				// resize to expected size (in model .xml file)
-				//---------------------------
+				//---------------------------------------------
+				// Resize to expected size (in model .xml file)
+				//---------------------------------------------
 
 				// Input frame is resized to infer resolution
-				resize(frame, output_frames[mb],
-						Size(output_width, output_height));
+				resize(frame[mb], output_frames[mb],
+					   Size(output_width, output_height));
 				frameInfer = output_frames[mb];
 
-				//---------------------------
+				//----------------------------------------------------
 				// PREPROCESS STAGE:
 				// convert image to format expected by inference engine
 				// IE expects planar, convert from packed
-				//---------------------------
+				//----------------------------------------------------
 				size_t framesize = frameInfer.rows * frameInfer.step1();
 
-				if (framesize != input_size) {
+				if (framesize != input_size)
+				{
 					std::cout << "input pixels mismatch, expecting "
-							<< input_size << " bytes, got: " << framesize
-							<< endl;
+							  << input_size << " bytes, got: " << framesize
+							  << endl;
 					return 1;
 				}
 
-				// store as planar BGR for Inference Engine
-				// imgIdx = image pixel counter
-				// channel_size = size of a channel, computed as image size in bytes divided by number of channels, or image width * image height
-				// input_channels = 3 for RGB image
-				// inputPtr = a pointer to pre-allocated inout buffer
+				// Store as planar BGR for Inference Engine
+				// imgIdx -> image pixel counter
+				// channel_size -> size of a channel, computed as image size in bytes divided by number of channels, or image width * image height
+				// input_channels -> 3 for RGB image
+				// inputPtr -> a pointer to pre-allocated inout buffer
 				for (size_t i = 0, imgIdx = 0, idx = 0; i < channel_size;
-						i++, idx++) {
-					for (size_t ch = 0; ch < input_channels; ch++, imgIdx++) {
+					 i++, idx++)
+				{
+					for (size_t ch = 0; ch < input_channels; ch++, imgIdx++)
+					{
 						inputPtr[idx + ch * channel_size] =
-								frameInfer.data[imgIdx];
+							frameInfer.data[imgIdx];
 					}
 				}
 			}
 
-			if (no_more_data) {
-				break;
+			if (noMoreData[index])
+			{
+				++index;
+				Mat messageWindow = Mat(displayWindowHeight, displayWindowWidth, CV_8UC1, Scalar(0));
+				std::string message = "Video stream from " + vidCapObj.camName + " has ended!";
+				cv::putText(messageWindow, message, Point((250), displayWindowHeight/2), 
+						cv::FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1);
+				imshow(vidCapObj.camName, messageWindow);
+				continue;
 			}
 
 			//---------------------------
@@ -572,27 +601,24 @@ int main(int argc, char **argv) {
 			//---------------------------
 			std::chrono::high_resolution_clock::time_point infer_start_time = std::chrono::high_resolution_clock::now();
 			sts = p_plugin->Infer(inputBlobs, outputBlobs, &dsc);
-			if (sts != 0) {
-				std::cout << "An infer error occurred: " << dsc.msg
-						<< std::endl;
+			if (sts != 0)
+			{
+				std::cout << "An infer error occurred: " << dsc.msg << std::endl;
 				return 1;
 			}
 			std::chrono::high_resolution_clock::time_point infer_stop_time = std::chrono::high_resolution_clock::now();
 			std::chrono::duration<float> infer_time = std::chrono::duration_cast<std::chrono::duration<float>>(infer_stop_time - infer_start_time);
 			//---------------------------
 			// POSTPROCESS STAGE:
-			// parse output
+			// Parse output
 			//---------------------------
-			InferenceEngine::Blob::Ptr detectionOutBlob =
-					outputBlobs[outputName];
+			InferenceEngine::Blob::Ptr detectionOutBlob = outputBlobs[outputName];
 			const InferenceEngine::TBlob<float>::Ptr detectionOutArray =
-					std::dynamic_pointer_cast<InferenceEngine::TBlob<float>>(
-							detectionOutBlob);
+				std::dynamic_pointer_cast<InferenceEngine::TBlob<float>>(detectionOutBlob);
 
-			for (size_t mb = 0; mb < conf_batchSize; mb++) {
-
+			for (size_t mb = 0; mb < conf_batchSize; mb++)
+			{
 				float *box = detectionOutArray->data() + outputSize * mb;
-
 				for (int i = 0; i < vidCapObj.noLabels; ++i)
 				{
 					vidCapObj.currentCount[i] = 0;
@@ -600,30 +626,32 @@ int main(int argc, char **argv) {
 				}
 
 				//---------------------------
-				// parse SSD output
+				// Parse SSD output
 				//---------------------------
-				for (int c = 0; c < maxProposalCount; c++) {
+				for (int c = 0; c < maxProposalCount; c++)
+				{
 					float *localbox = &box[c * 7];
 					float image_id = localbox[0];
 					float label = localbox[1] - 1;
 					float confidence = localbox[2];
 
-					int labelnum = (int) label;
-					if ((confidence > conf_thresholdValue) && usedLabels[labelnum]) {
+					int labelnum = (int)label;
+					if ((confidence > conf_thresholdValue) && usedLabels[labelnum])
+					{
 
 						int pos = labelPos[labelnum];
 						vidCapObj.currentCount[pos]++;
 
-						float xmin = localbox[3] * output_width;
-						float ymin = localbox[4] * output_height;
-						float xmax = localbox[5] * output_width;
-						float ymax = localbox[6] * output_height;
+						float xmin = localbox[3] * vidCapObj.inputWidth;
+						float ymin = localbox[4] * vidCapObj.inputHeight;
+						float xmax = localbox[5] * vidCapObj.inputWidth;
+						float ymax = localbox[6] * vidCapObj.inputHeight;
 
 						char tmplabel[32];
-						rectangle(output_frames[mb],
-								Point((int) xmin, (int) ymin),
-								Point((int) xmax, (int) ymax),
-								Scalar(0, 255, 0), 4, LINE_AA, 0);
+						rectangle(frame[mb],
+								  Point((int)xmin, (int)ymin),
+								  Point((int)xmax, (int)ymax),
+								  Scalar(0, 255, 0), 4, LINE_AA, 0);
 					}
 				}
 
@@ -631,19 +659,22 @@ int main(int argc, char **argv) {
 				{
 					if (vidCapObj.candidateCount[i] == vidCapObj.currentCount[i])
 						vidCapObj.candidateConfidence[i]++;
-					else {
+					else
+					{
 						vidCapObj.candidateConfidence[i] = 0;
 						vidCapObj.candidateCount[i] = vidCapObj.currentCount[i];
 					}
 
-					if (vidCapObj.candidateConfidence[i] == conf_candidateConfidence) {
+					if (vidCapObj.candidateConfidence[i] == conf_candidateConfidence)
+					{
 						vidCapObj.candidateConfidence[i] = 0;
 						vidCapObj.changedCount[i] = true;
 					}
 					else
 						continue;
 
-					if (vidCapObj.currentCount[i] > vidCapObj.lastCorrectCount[i]) {
+					if (vidCapObj.currentCount[i] > vidCapObj.lastCorrectCount[i])
+					{
 						vidCapObj.totalCount[i] += vidCapObj.currentCount[i] - vidCapObj.lastCorrectCount[i];
 						time_t t = time(nullptr);
 						tm *currTime = localtime(&t);
@@ -651,9 +682,14 @@ int main(int argc, char **argv) {
 						char str[50];
 						for (int j = 0; j < detObj; ++j)
 						{
-							sprintf(str,"%02d:%02d:%02d - Intruder %s detected on %s", currTime->tm_hour, currTime->tm_min, currTime->tm_sec, labelNames[i].c_str(), vidCapObj.camName.c_str());
+							totalCount = 0;
+							for(auto cnt : vidCapObj.totalCount)
+								totalCount += cnt;
+							sprintf(str, "%02d:%02d:%02d - Intruder %s detected on %s", currTime->tm_hour, 
+								currTime->tm_min, currTime->tm_sec, labelNames[i].c_str(), 
+								vidCapObj.camName.c_str());
 							logList.emplace_back(str);
-							sprintf(str,"%s\n", str);
+							sprintf(str, "%s\n", str);
 							cout << str;
 							logFile << str;
 							if (logList.size() > rollingLogSize)
@@ -661,76 +697,80 @@ int main(int argc, char **argv) {
 								logList.pop_front();
 							}
 							event evt;
-							sprintf(evt.time,"%02d:%02d:%02d", currTime->tm_hour, currTime->tm_min, currTime->tm_sec);
+							sprintf(evt.time, "%02d:%02d:%02d", currTime->tm_hour, currTime->tm_min, 
+								currTime->tm_sec);
 							evt.intruder = labelNames[i];
-							evt.frame = frames;
-							evt.count = ++totalCount;
-							events.push_back(evt);
+							evt.frame = vidCapObj.frameCount;
+							evt.count = totalCount;
+							vidCapObj.events.push_back(evt);
+
 						}
 						// Saving image when detection occurs
 						sprintf(str, "./caps/%d%d_%s.jpg", currTime->tm_hour, currTime->tm_min, labelNames[i].c_str());
-						imwrite(str, output_frames[mb]);
+						imwrite(str, frame[mb]);
 					}
 
 					vidCapObj.lastCorrectCount[i] = vidCapObj.currentCount[i];
-
 				}
-				++frames;
+				++vidCapObj.frameCount;
 			}
 
-			//---------------------------
-			// Output/render
-			//---------------------------
+			//----------------------------------------
+			// Display the video result and log window
+			//----------------------------------------
 
-			for (int mb = 0; mb < conf_batchSize; mb++) {
-				vidCapObj.vw.write(output_frames[mb]);
+			for (int mb = 0; mb < conf_batchSize; mb++)
+			{
+				vidCapObj.vw.write(frame[mb]);
 
 				int i = 0;
-				logs = Mat(output_height, output_width > 410 ? output_width:410, CV_8UC1, Scalar(0));
+				logs = Mat(logWinHeight, logWinWidth, CV_8UC1, Scalar(0));
 				for (list<string>::iterator it = logList.begin(); it != logList.end(); ++it)
 				{
-					putText(logs, *it, Point(10, 15 + 20 * i), CV_FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 1, 8, false);
+					putText(logs, *it, Point(10, 15 + 20 * i), cv::FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 1);
 					++i;
 				}
 				std::chrono::high_resolution_clock::time_point end_time = std::chrono::high_resolution_clock::now();
 				std::chrono::duration<float> frame_time = std::chrono::duration_cast<std::chrono::duration<float>>(end_time - start_time);
 				char vid_fps[20];
 				sprintf(vid_fps, "FPS: %.2f", 1 / frame_time.count());
-				cv::putText(output_frames[mb], string(vid_fps), cv::Point(10, output_height - 10), CV_FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1, 8, false);
+				cv::putText(frame[mb], string(vid_fps), cv::Point(10, vidCapObj.inputHeight - 10), cv::FONT_HERSHEY_SIMPLEX, 
+					    	0.5, cv::Scalar(255, 255, 255), 1, 8, false);
 				char infTm[20];
 				sprintf(infTm, "Infer time: %.3f", infer_time.count());
-				cv::putText(output_frames[mb], string(infTm), cv::Point(10, output_height - 30), CV_FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1, 8, false);
-				cv::imshow(vidCapObj.camName, output_frames[mb]);
+				cv::putText(frame[mb], string(infTm), cv::Point(10, vidCapObj.inputHeight - 30), cv::FONT_HERSHEY_SIMPLEX, 
+						0.5, cv::Scalar(255, 255, 255), 1, 8, false);
+				cv::imshow(vidCapObj.camName, frame[mb]);
 				cv::imshow("Intruder Log", logs);
 				start_time = std::chrono::high_resolution_clock::now();
-
-				if (waitKey(1) == 27)
-				{
-					saveJSON(events, vidCaps[0]);
-					return 0;
-				}
 
 				if (loopVideos && !vidCapObj.isCam)
 				{
 					int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
-					vidCapObj.loopFrames++;
-					if (vidCapObj.loopFrames > vidCapObj.vc.get(CV_CAP_PROP_FRAME_COUNT) - round(vfps / minFPS))
+					if (vidCapObj.loopFrames > vidCapObj.vc.get(cv::CAP_PROP_FRAME_COUNT) - round(vfps / minFPS))
 					{
 						vidCapObj.loopFrames = 0;
-						vidCapObj.vc.set(CV_CAP_PROP_POS_FRAMES, 0);
+						vidCapObj.vc.set(cv::CAP_PROP_POS_FRAMES, 0);
 					}
 				}
 			}
+			++index;
 		}
-
-		if (no_more_data) {
+		// Press Esc to exit the application 
+		if (waitKey(1) == 27)
+		{
 			break;
 		}
+
+		// Check if all the videos have ended
+		if (find(noMoreData.begin(), noMoreData.end(), false) == noMoreData.end())
+			break;
 	}
 
-	saveJSON(events, vidCaps[0]);
-
+	// Save the JSON output
+	saveJSON(vidCaps[0].events, vidCaps[0]);
 	delete[] output_frames;
-
+	delete[] frame;
+	destroyAllWindows();
 	return 0;
 }

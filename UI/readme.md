@@ -1,10 +1,18 @@
 # Intruder Detector UI
-This is a web-based UI specifically designed to display the information that the Store-traffic-monitor reference implementation processes.   
-This web browser UI is not real-time, but uses the information procesed by the application. Because of this, the UI should be started after the application has been stopped.
+This is a web-based UI specifically designed to display the information that the Intruder Detector reference implementation processes.   
+This web browser UI is not real-time, but uses the information processed  by the application. Because of this, the UI should be started after the application has been stopped.
 
 ## Running the UI
-In the `UI` folder of the reference-implementation run the following commands.   
-
+Go to UI directory present in intruder-detector.
+```
+cd UI
+```
+### Install the dependencies
+```
+sudo apt install composer
+composer install
+```
+Run the following command on the terminal to open the UI.<br>
 Chrome*:
 ```
 google-chrome  --user-data-dir=$HOME/.config/google-chrome/Intruder-detector --new-window --allow-file-access-from-files --allow-file-access --allow-cross-origin-auth-prompt index.html

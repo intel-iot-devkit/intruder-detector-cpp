@@ -1,6 +1,4 @@
 /*
- * Authors: Stefan Andritoiu <stefan.andritoiu@gmail.com>
- *          Mihai Stefanescu <mihai.stefanescu@rinftech.com>
  * Copyright (c) 2018 Intel Corporation.
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -31,21 +29,22 @@
 
 using namespace std;
 
-static string conf_targetDevice = "CPU";
+static string conf_targetDevice;
 static string conf_modelPath;
 static string conf_binFilePath;
 static string conf_labelsFilePath;
 static const string conf_file = "../resources/conf.txt";
 static const size_t conf_batchSize = 1;
-static const int conf_windowColumns = 5; // OpenCV windows per each row
-
+static const int conf_windowColumns = 2; // OpenCV windows per each row
+const int displayWindowWidth = 768;
+const int displayWindowHeight = 432;
 bool loopVideos = false;
 
-static const int conf_fourcc = CV_FOURCC('H','2','6','4');
+static const int conf_fourcc = 0x00000021; 
 
 static const double conf_thresholdValue = 0.55;
-static const int conf_candidateConfidence = 3;
-static std::vector<std::string> acceptedDevices{"CPU", "GPU", "MYRIAD"};
+static const int conf_candidateConfidence = 4;
+static std::vector<std::string> acceptedDevices{"CPU", "GPU", "MYRIAD", "HETERO:FPGA,CPU", "HETERO:HDDL,CPU"};
 
 typedef struct {
 	char time[25];
@@ -70,10 +69,11 @@ public:
 	vector<int> candidateConfidence;
 
 	vector<string> labelName;
-
+	vector<event> events;
 	cv::VideoCapture vc;
 	cv::VideoWriter vw;
 
+	int frameCount = 0;
 	int loopFrames = 0;
 	bool isCam = false;
 
@@ -91,7 +91,11 @@ public:
 		, vc(inputVideo.c_str())
 		, camName(camName)
 		, videoName("../../UI/resources/videos/video" + to_string(number) + ".mp4") {
-			cv::namedWindow(camName);
+			if (!vc.isOpened())
+			{
+				std::cout << "Couldn't open video " << inputVideo << std::endl;
+				exit(1);
+			}
 		}
 
 	VideoCap(size_t inputWidth,
@@ -105,7 +109,11 @@ public:
 		, vc(inputVideo)
 		, camName(camName)
 		, videoName("../../UI/resources/videos/video" + to_string(number) + ".mp4") {
-			cv::namedWindow(camName);
+			if (!vc.isOpened())
+			{
+				std::cout << "Couldn't open video " << inputVideo << std::endl;
+				exit(1);
+			}
 			isCam = true;
 		}
 
