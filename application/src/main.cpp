@@ -38,16 +38,19 @@
 #include <ie_plugin_dispatcher.hpp>
 #include <ie_plugin_ptr.hpp>
 #include <inference_engine.hpp>
-
+#include <samples/ocv_common.hpp>
+#include <samples/slog.hpp>
 #include <ie_extension.h>
 #include <ext_list.hpp>
-
+#include <nlohmann/json.hpp>
 #include <videocap.hpp>
 
 using namespace cv;
 using namespace InferenceEngine::details;
 using namespace InferenceEngine;
-
+bool isAsyncMode = true;
+using json = nlohmann::json;
+json jsonobj;
 
 // Parse the environmental variables
 void parseEnv()
@@ -76,7 +79,10 @@ void parseArgs(int argc, char **argv)
 		std::cout << argv[0] << " -m MODEL -l LABELS [OPTIONS]\n\n"
 					"-m, --model	Path to .xml file containing model layers\n"
 					"-l, --labels	Path to labels file\n"
-					"-d, --device	Device to run the inference (CPU, GPU, MYRIAD, FPGA or HDDL only). Default option is CPU\n"
+					"-d, --device	Device to run the inference (CPU, GPU, MYRIAD, FPGA or HDDL only)."
+					                "Default option is CPU\n"
+							" To run on multiple devices, use MULTI:<device1>,<device2>,<device3>\n"
+					"-f, --flag	execution on SYNC or ASYNC mode. Default option is ASYNC mode\n"
 					"-lp, --loop	Loop video to mimic continuous input\n";
 		exit(0);
 	}
@@ -108,6 +114,13 @@ void parseArgs(int argc, char **argv)
 				loopVideos = false;
 			}
 		}
+		if ("-f" == std::string(argv[i]) || "--flag" == std::string(argv[i]))
+		{
+			if(std::string(argv[i+1]) == "sync")
+				isAsyncMode = false;
+			else
+				isAsyncMode = true;
+		}
 	}
 }
 
@@ -133,6 +146,9 @@ void checkArgs()
 	{
 		conf_targetDevice = "CPU";
 	}
+	else if(!conf_targetDevice.find("MULTI")) {
+		conf_targetDevice = conf_targetDevice;
+	}
 	else if (!(std::find(acceptedDevices.begin(), acceptedDevices.end(), conf_targetDevice) != acceptedDevices.end()))
 	{
 		std::cout << "Unsupported device " << conf_targetDevice << std::endl;
@@ -141,16 +157,7 @@ void checkArgs()
 }
 
 
-static InferenceEngine::InferenceEnginePluginPtr loadPlugin(TargetDevice myTargetDevice)
-{
-	InferenceEngine::PluginDispatcher dispatcher({""});
-
-	return static_cast<InferenceEngine::InferenceEnginePluginPtr>(dispatcher.getPluginByDevice(
-		conf_targetDevice));
-}
-
-
-static void configureNetwork(InferenceEngine::CNNNetReader &network, TargetDevice myTargetDevice)
+static void configureNetwork(InferenceEngine::CNNNetReader &network)
 {
 	try
 	{
@@ -169,7 +176,8 @@ static void configureNetwork(InferenceEngine::CNNNetReader &network, TargetDevic
 
 
 // Read the model's label file and get the position of labels required by the application
-static std::vector<bool> getUsedLabels(std::vector<string> *reqLabels, std::vector<int> *labelPos, std::vector<string> *labelNames)
+static std::vector<bool> getUsedLabels(std::vector<string> *reqLabels, std::vector<int> *labelPos,
+                                                std::vector<string> *labelNames)
 {
 	std::vector<bool> usedLabels;
 
@@ -212,31 +220,30 @@ std::vector<VideoCap> getInput(std::ifstream *file, size_t width, size_t height,
 	std::string str;
 	int cams = 0;
 	char camName[20];
-
-	while (std::getline(*file, str))
+	*file>>jsonobj;
+	auto obj = jsonobj["inputs"];
+	for(int i=0;i<obj.size();i++)
 	{
-		int delim = str.find(':');
-		if (str.substr(0, delim) == string("video"))
+		auto label = obj[i]["label"];
+		auto path = obj[i]["video"];
+
+		for(int j = 0;j<path.size();j++)
 		{
-			++cams;
-			sprintf(camName, "Cam %d", cams);
-			std::string path = str.substr(delim + 2);
-			if (path.size() == 1 && *(path.c_str()) >= '0' && *(path.c_str()) <= '9') // Get cam ID
+			sprintf(camName, "Cam %d", j+1);
+			string file_path = path[j];
+			if (file_path.size() == 1 && *(file_path.c_str()) >= '0' && *(file_path.c_str()) <= '9')
 			{
-				streams.push_back(VideoCap(width, height, 0, camName, cams));
+				streams.push_back(VideoCap(width, height, std::stoi(file_path), camName, cams));
 			}
 			else
 			{
-				streams.push_back(VideoCap(width, height, path, camName, cams));
+				streams.push_back(VideoCap(width, height, file_path, camName, cams));
 			}
 		}
-		else if (str.substr(0, delim) == string("intruder"))
+		for(int j = 0;j<label.size();j++)
 		{
-			(*usedLabels).push_back(str.substr(delim + 2));
-		}
-		else
-		{
-			cout << "Unrecognized option; Ignoring\n";
+			(*usedLabels).push_back(label[j]);
+
 		}
 	}
 
@@ -298,14 +305,14 @@ void arrangeWindows(vector<VideoCap> *vidCaps, size_t width, size_t height)
 void saveJSON(vector<event> events, VideoCap vcap)
 {
 
-	ofstream evtJson("../../UI/resources/video_data/events.json");
+	ofstream evtJson("../UI/resources/video_data/events.json");
 	if (!evtJson.is_open())
 	{
 		cout << "Could not create JSON file" << endl;
 		return;
 	}
 
-	ofstream dataJson("../../UI/resources/video_data/data.json");
+	ofstream dataJson("../UI/resources/video_data/data.json");
 	if (!dataJson.is_open())
 	{
 		cout << "Could not create JSON file" << endl;
@@ -355,7 +362,6 @@ void saveJSON(vector<event> events, VideoCap vcap)
 
 int main(int argc, char **argv)
 {
-
 	int logWinHeight = 432;
 	int logWinWidth = 410;
 	std::vector<bool> noMoreData;
@@ -371,101 +377,104 @@ int main(int argc, char **argv)
 	}
 
 	// Inference engine initialization
-	// Set the Target Device
-	TargetDevice myTargetDevice = TargetDeviceInfo::fromStr(conf_targetDevice);
+	Core ie;
 
-	// Load the IE plugin for the target device
-	InferenceEngine::InferenceEnginePluginPtr p_plugin = loadPlugin(
-		myTargetDevice);
+	InferenceEngine::CNNNetReader network;
 
 	// Configure the network
-	InferenceEngine::CNNNetReader network;
-	configureNetwork(network, myTargetDevice);
-
-	// Set input configuration
-	InputsDataMap inputs;
-	inputs = network.getNetwork().getInputsInfo();
-
-	if (inputs.size() != 1)
-	{
-		std::cout << "This sample accepts networks having only one input."
-				  << std::endl;
-		return 1;
-	}
-
-	InferenceEngine::SizeVector inputDims = inputs.begin()->second->getDims();
-
-	if (inputDims.size() != 4)
-	{
-		std::cout << "Not supported input dimensions size, expected 4, got "
-				  << inputDims.size() << std::endl;
-	}
-
-	std::string imageInputName = inputs.begin()->first;
-	DataPtr image = inputs[imageInputName]->getInputData();
-	inputs[imageInputName]->setInputPrecision(Precision::FP32);
-
-	// Allocate input blobs
-	InferenceEngine::BlobMap inputBlobs;
-	InferenceEngine::TBlob<float>::Ptr pInputBlobData = InferenceEngine::make_shared_blob<float,
-							   const InferenceEngine::SizeVector>(Precision::FP32, inputDims);
-	pInputBlobData->allocate();
-	inputBlobs[imageInputName] = pInputBlobData;
-
-	// Add CPU Extension
-	InferencePlugin plugin(p_plugin);
+	configureNetwork(network);
 	if ((conf_targetDevice.find("CPU") != std::string::npos))
 	{
 		// Required for support of certain layers in CPU
-		plugin.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>());
+		ie.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>(), "CPU");
 	}
+	InputsDataMap inputInfo(network.getNetwork().getInputsInfo());
 
-	// Load model into plugin
-	InferenceEngine::ResponseDesc dsc;
-	InferenceEngine::StatusCode sts = p_plugin->LoadNetwork(network.getNetwork(), &dsc);
-	if (sts != 0)
+	std::string imageInputName, imageInfoInputName;
+	size_t netInputHeight, netInputWidth, netInputChannel;
+
+	for (const auto & inputInfoItem : inputInfo)
 	{
-		std::cout << "Error loading model into plugin: " << dsc.msg
-				  << std::endl;
-		return 1;
+	if (inputInfoItem.second->getTensorDesc().getDims().size() == 4)
+	{  // first input contains images
+	    imageInputName = inputInfoItem.first;
+	    inputInfoItem.second->setPrecision(Precision::U8);
+	    inputInfoItem.second->getInputData()->setLayout(Layout::NCHW);
+	    const TensorDesc& inputDesc = inputInfoItem.second->getTensorDesc();
+	    netInputHeight = getTensorHeight(inputDesc);
+	    netInputWidth = getTensorWidth(inputDesc);
+	    netInputChannel = getTensorChannels(inputDesc);
+	}
+	else if (inputInfoItem.second->getTensorDesc().getDims().size() == 2)
+	{  // second input contains image info
+	    imageInfoInputName = inputInfoItem.first;
+	    inputInfoItem.second->setPrecision(Precision::FP32);
+	}
+	else
+	{
+	    throw std::logic_error("Unsupported " +
+		                   std::to_string(inputInfoItem.second->getTensorDesc().getDims().size()) + "D "
+		                   "input layer '" + inputInfoItem.first + "'. "
+		                   "Only 2D and 4D input layers are supported");
+	}
 	}
 
-	//  Inference engine output setup
+	OutputsDataMap outputInfo(network.getNetwork().getOutputsInfo());
+	if (outputInfo.size() != 1) {
+	throw std::logic_error("This demo accepts networks having only one output");
+	}
+	DataPtr& output = outputInfo.begin()->second;
+	auto outputName = outputInfo.begin()->first;
+	const int num_classes = network.getNetwork().getLayerByName(outputName.c_str())->GetParamAsInt("num_classes");
+	const SizeVector outputDims = output->getTensorDesc().getDims();
+	const int maxProposalCount = outputDims[2];
+
+	const int objectSize = outputDims[3];
+	if (objectSize != 7) {
+	throw std::logic_error("Output should have 7 as a last dimension");
+	}
+	if (outputDims.size() != 4) {
+	throw std::logic_error("Incorrect output dimensions for SSD");
+	}
+	output->setPrecision(Precision::FP32);
+	output->setLayout(Layout::NCHW);
+	// -----------------------------------------------------------------------------------------------------
+
+	// --------------------------- 4. Loading model to the device ------------------------------------------
+	slog::info << "Loading model to the device" << slog::endl;
+	ExecutableNetwork net = ie.LoadNetwork(network.getNetwork(), conf_targetDevice);
+	// -----------------------------------------------------------------------------------------------------
+
+	// --------------------------- 5. Create infer request -------------------------------------------------
+	InferenceEngine::InferRequest::Ptr currInfReq = net.CreateInferRequestPtr();
+	InferenceEngine::InferRequest::Ptr nextInfReq = net.CreateInferRequestPtr();
 
 	// ----------------------
 	// get output dimensions
 	// ----------------------
-	InferenceEngine::OutputsDataMap outputsDataMap;
-	outputsDataMap = network.getNetwork().getOutputsInfo();
-	InferenceEngine::BlobMap outputBlobs;
-
-	std::string outputName = outputsDataMap.begin()->first;
-
-	int maxProposalCount = -1;
-
-	for (auto &&item : outputsDataMap)
+	/* it's enough just to set image info input (if used in the model) only once */
+	if (!imageInfoInputName.empty())
 	{
-		InferenceEngine::SizeVector outputDims = item.second->dims;
-
-		InferenceEngine::TBlob<float>::Ptr output;
-		output = InferenceEngine::make_shared_blob<float, 
-						const InferenceEngine::SizeVector>(Precision::FP32, outputDims);
-		output->allocate();
-		outputBlobs[item.first] = output;
-		maxProposalCount = outputDims[1];
+	auto setImgInfoBlob = [&](const InferRequest::Ptr &inferReq) {
+	    auto blob = inferReq->GetBlob(imageInfoInputName);
+	    auto data = blob->buffer().as<PrecisionTrait<Precision::FP32>::value_type *>();
+	    data[0] = static_cast<float>(netInputHeight);  // height
+	    data[1] = static_cast<float>(netInputWidth);  // width
+	    data[2] = 1;
+	};
+	setImgInfoBlob(currInfReq);
+	setImgInfoBlob(nextInfReq);
 	}
-
-	InferenceEngine::SizeVector outputDims = outputBlobs.cbegin()->second->dims();
-	size_t outputSize = outputBlobs.cbegin()->second->size() / conf_batchSize;
 
 	// Create VideoCap objects for all the videos and camera
 	std::vector<VideoCap> vidCaps;
+
 	// Requested labels 
 	std::vector<string> reqLabels;
-	vidCaps = getInput(&confFile, inputDims[1], inputDims[0], &reqLabels);
+	vidCaps = getInput(&confFile, netInputWidth, netInputHeight, &reqLabels);
 
-	const size_t output_width = inputDims[1];
-	const size_t output_height = inputDims[0];
+	const size_t output_width = netInputWidth;
+	const size_t output_height = netInputHeight;
 
 	// Initializing VideoWriter for each source 
 	for (auto &vidCapObj : vidCaps)
@@ -483,11 +492,9 @@ int main(int argc, char **argv)
 	Mat logs;
 	arrangeWindows(&vidCaps, output_width, output_height);
 
-	Mat frameInfer;
-	Mat *frame = new Mat[conf_batchSize];
-	Mat *output_frames = new Mat[conf_batchSize];
+	Mat frameInfer, prev_frame, frame, output_frames;
 
-	auto input_channels = inputDims[2]; // Channels for color format, RGB=4
+	auto input_channels = netInputChannel; // Channels for color format, RGB=4
 	auto channel_size = output_width * output_height;
 	auto input_size = channel_size * input_channels;
 
@@ -497,9 +504,7 @@ int main(int argc, char **argv)
 	std::vector<bool> usedLabels = getUsedLabels(&reqLabels, &labelPos, &labelNames);
 	if (usedLabels.empty())
 	{
-		std::cout
-			<< "Error: No labels currently in use. Please edit conf.txt file"
-			<< std::endl;
+		std::cout<< "Error: No labels currently in use. Please edit conf.txt file"<< std::endl;
 		return 1;
 	}
 
@@ -517,7 +522,14 @@ int main(int argc, char **argv)
 	std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
 
 	int minFPS = get_minFPS(vidCaps);
-	int waitTime = (int)(round(1000 / minFPS / vidCaps.size()));
+	int waitTime = 1;
+	if(isAsyncMode)
+		std::cout<<"Application runnning in Async mode"<<std::endl;
+	else
+		std::cout<<"Application runnning in sync mode"<<std::endl;
+
+	VideoCap *prevVideoCap;
+	typedef std::chrono::duration<double,std::ratio<1, 1000>> ms;
 
 	// Main loop starts here
 	for (;;)
@@ -525,66 +537,20 @@ int main(int argc, char **argv)
 		index = 0;
 		for (auto &vidCapObj : vidCaps)
 		{
-			for (size_t mb = 0; mb < conf_batchSize; mb++)
+			//---------------------------
+			// Get a new frame
+			//---------------------------
+			int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
+			for (int i = 0; i < round(vfps / minFPS); ++i)
 			{
-				float *inputPtr = pInputBlobData.get()->data() + input_size * mb;
-
-				//---------------------------
-				// Get a new frame
-				//---------------------------
-				int vfps = (int)round(vidCapObj.vc.get(CAP_PROP_FPS));
-				for (int i = 0; i < round(vfps / minFPS); ++i)
-				{
-					vidCapObj.vc.read(frame[mb]);
-					vidCapObj.loopFrames++;
-				}
-
-				if (!frame[mb].data)
-				{
-					noMoreData[index] = true;
-					break;
-				}
-
-				//---------------------------------------------
-				// Resize to expected size (in model .xml file)
-				//---------------------------------------------
-
-				// Input frame is resized to infer resolution
-				resize(frame[mb], output_frames[mb],
-					   Size(output_width, output_height));
-				frameInfer = output_frames[mb];
-
-				//----------------------------------------------------
-				// PREPROCESS STAGE:
-				// convert image to format expected by inference engine
-				// IE expects planar, convert from packed
-				//----------------------------------------------------
-				size_t framesize = frameInfer.rows * frameInfer.step1();
-
-				if (framesize != input_size)
-				{
-					std::cout << "input pixels mismatch, expecting "
-							  << input_size << " bytes, got: " << framesize
-							  << endl;
-					return 1;
-				}
-
-				// Store as planar BGR for Inference Engine
-				// imgIdx -> image pixel counter
-				// channel_size -> size of a channel, computed as image size in bytes divided by number of channels, or image width * image height
-				// input_channels -> 3 for RGB image
-				// inputPtr -> a pointer to pre-allocated inout buffer
-				for (size_t i = 0, imgIdx = 0, idx = 0; i < channel_size;
-					 i++, idx++)
-				{
-					for (size_t ch = 0; ch < input_channels; ch++, imgIdx++)
-					{
-						inputPtr[idx + ch * channel_size] =
-							frameInfer.data[imgIdx];
-					}
-				}
+				vidCapObj.vc.read(frame);
+				vidCapObj.loopFrames++;
+				vidCapObj.frame = frame;
 			}
-
+			if (!frame.data)
+			{
+				noMoreData[index] = true;
+			}
 			if (noMoreData[index])
 			{
 				++index;
@@ -595,34 +561,65 @@ int main(int argc, char **argv)
 				imshow(vidCapObj.camName, messageWindow);
 				continue;
 			}
+			Blob::Ptr inputBlob;
+			//---------------------------------------------
+			// Resize to expected size (in model .xml file)
+			//---------------------------------------------
+
+			// Input frame is resized to infer resolution
+
+			resize(frame, output_frames, Size(output_width, output_height));
+			frameInfer = output_frames;
+			if(isAsyncMode)
+			{
+				inputBlob = nextInfReq->GetBlob(imageInputName);
+			}
+			else
+			{
+				inputBlob = currInfReq->GetBlob(imageInputName);
+				prevVideoCap = &vidCapObj;
+				prev_frame = vidCapObj.frame;
+			}
+			matU8ToBlob<uint8_t>(output_frames, inputBlob);
+
+			//----------------------------------------------------
+			// PREPROCESS STAGE:
+			// convert image to format expected by inference engine
+			// IE expects planar, convert from packed
+			//----------------------------------------------------
+			size_t framesize = frameInfer.rows * frameInfer.step1();
+
+			if (framesize != input_size)
+			{
+				std::cout << "input pixels mismatch, expecting "
+							<< input_size << " bytes, got: " << framesize
+							<< endl;
+				return 1;
+			}
 
 			//---------------------------
 			// INFER STAGE
 			//---------------------------
 			std::chrono::high_resolution_clock::time_point infer_start_time = std::chrono::high_resolution_clock::now();
-			sts = p_plugin->Infer(inputBlobs, outputBlobs, &dsc);
-			if (sts != 0)
-			{
-				std::cout << "An infer error occurred: " << dsc.msg << std::endl;
-				return 1;
-			}
+			if(isAsyncMode)
+				nextInfReq->StartAsync();
+			else
+				currInfReq->StartAsync();
 			std::chrono::high_resolution_clock::time_point infer_stop_time = std::chrono::high_resolution_clock::now();
-			std::chrono::duration<float> infer_time = std::chrono::duration_cast<std::chrono::duration<float>>(infer_stop_time - infer_start_time);
-			//---------------------------
-			// POSTPROCESS STAGE:
-			// Parse output
-			//---------------------------
-			InferenceEngine::Blob::Ptr detectionOutBlob = outputBlobs[outputName];
-			const InferenceEngine::TBlob<float>::Ptr detectionOutArray =
-				std::dynamic_pointer_cast<InferenceEngine::TBlob<float>>(detectionOutBlob);
-
-			for (size_t mb = 0; mb < conf_batchSize; mb++)
+			ms infer_time = std::chrono::duration_cast<ms>(infer_stop_time - infer_start_time);
+			if(OK == currInfReq->Wait(IInferRequest::WaitMode::RESULT_READY))
 			{
-				float *box = detectionOutArray->data() + outputSize * mb;
+				//---------------------------
+				// POSTPROCESS STAGE:
+				// Parse output
+				//---------------------------
+				float *box = currInfReq->GetBlob(outputName)->buffer().as<InferenceEngine::PrecisionTrait
+				    <InferenceEngine::Precision::FP32>::value_type *>();
+
 				for (int i = 0; i < vidCapObj.noLabels; ++i)
 				{
-					vidCapObj.currentCount[i] = 0;
-					vidCapObj.changedCount[i] = false;
+					prevVideoCap->currentCount[i] = 0;
+					prevVideoCap->changedCount[i] = false;
 				}
 
 				//---------------------------
@@ -634,60 +631,58 @@ int main(int argc, char **argv)
 					float image_id = localbox[0];
 					float label = localbox[1] - 1;
 					float confidence = localbox[2];
-
 					int labelnum = (int)label;
 					if ((confidence > conf_thresholdValue) && usedLabels[labelnum])
 					{
 
 						int pos = labelPos[labelnum];
-						vidCapObj.currentCount[pos]++;
+						prevVideoCap->currentCount[pos]++;
 
-						float xmin = localbox[3] * vidCapObj.inputWidth;
-						float ymin = localbox[4] * vidCapObj.inputHeight;
-						float xmax = localbox[5] * vidCapObj.inputWidth;
-						float ymax = localbox[6] * vidCapObj.inputHeight;
+						float xmin = localbox[3] * prevVideoCap->inputWidth;
+						float ymin = localbox[4] * prevVideoCap->inputHeight;
+						float xmax = localbox[5] * prevVideoCap->inputWidth;
+						float ymax = localbox[6] * prevVideoCap->inputHeight;
 
 						char tmplabel[32];
-						rectangle(frame[mb],
-								  Point((int)xmin, (int)ymin),
-								  Point((int)xmax, (int)ymax),
-								  Scalar(0, 255, 0), 4, LINE_AA, 0);
+						rectangle(prev_frame, Point((int)xmin, (int)ymin), Point((int)xmax, (int)ymax),
+									Scalar(0, 255, 0), 4, LINE_AA, 0);
 					}
 				}
 
-				for (int i = 0; i < vidCapObj.noLabels; ++i)
+				for (int i = 0; i < prevVideoCap->noLabels; ++i)
 				{
-					if (vidCapObj.candidateCount[i] == vidCapObj.currentCount[i])
-						vidCapObj.candidateConfidence[i]++;
+					if (prevVideoCap->candidateCount[i] == prevVideoCap->currentCount[i])
+						prevVideoCap->candidateConfidence[i]++;
 					else
 					{
-						vidCapObj.candidateConfidence[i] = 0;
-						vidCapObj.candidateCount[i] = vidCapObj.currentCount[i];
+						prevVideoCap->candidateConfidence[i] = 0;
+						prevVideoCap->candidateCount[i] = prevVideoCap->currentCount[i];
 					}
 
-					if (vidCapObj.candidateConfidence[i] == conf_candidateConfidence)
+					if (prevVideoCap->candidateConfidence[i] == conf_candidateConfidence)
 					{
-						vidCapObj.candidateConfidence[i] = 0;
-						vidCapObj.changedCount[i] = true;
+						prevVideoCap->candidateConfidence[i] = 0;
+						prevVideoCap->changedCount[i] = true;
 					}
 					else
 						continue;
 
-					if (vidCapObj.currentCount[i] > vidCapObj.lastCorrectCount[i])
+					if (prevVideoCap->currentCount[i] > prevVideoCap->lastCorrectCount[i])
 					{
-						vidCapObj.totalCount[i] += vidCapObj.currentCount[i] - vidCapObj.lastCorrectCount[i];
+						prevVideoCap->totalCount[i] += prevVideoCap->currentCount[i] -
+							prevVideoCap->lastCorrectCount[i];
 						time_t t = time(nullptr);
 						tm *currTime = localtime(&t);
-						int detObj = vidCapObj.currentCount[i] - vidCapObj.lastCorrectCount[i];
+						int detObj = prevVideoCap->currentCount[i] - prevVideoCap->lastCorrectCount[i];
 						char str[50];
 						for (int j = 0; j < detObj; ++j)
 						{
 							totalCount = 0;
-							for(auto cnt : vidCapObj.totalCount)
+							for(auto cnt : prevVideoCap->totalCount)
 								totalCount += cnt;
-							sprintf(str, "%02d:%02d:%02d - Intruder %s detected on %s", currTime->tm_hour, 
-								currTime->tm_min, currTime->tm_sec, labelNames[i].c_str(), 
-								vidCapObj.camName.c_str());
+							sprintf(str, "%02d:%02d:%02d - Intruder %s detected on %s", currTime->tm_hour,
+								currTime->tm_min, currTime->tm_sec, labelNames[i].c_str(),
+								prevVideoCap->camName.c_str());
 							logList.emplace_back(str);
 							sprintf(str, "%s\n", str);
 							cout << str;
@@ -697,31 +692,28 @@ int main(int argc, char **argv)
 								logList.pop_front();
 							}
 							event evt;
-							sprintf(evt.time, "%02d:%02d:%02d", currTime->tm_hour, currTime->tm_min, 
+							sprintf(evt.time, "%02d:%02d:%02d", currTime->tm_hour, currTime->tm_min,
 								currTime->tm_sec);
 							evt.intruder = labelNames[i];
-							evt.frame = vidCapObj.frameCount;
+							evt.frame = prevVideoCap->frameCount;
 							evt.count = totalCount;
-							vidCapObj.events.push_back(evt);
+							prevVideoCap->events.push_back(evt);
 
 						}
 						// Saving image when detection occurs
 						sprintf(str, "./caps/%d%d_%s.jpg", currTime->tm_hour, currTime->tm_min, labelNames[i].c_str());
-						imwrite(str, frame[mb]);
+						imwrite(str, prev_frame);
 					}
 
-					vidCapObj.lastCorrectCount[i] = vidCapObj.currentCount[i];
+					prevVideoCap->lastCorrectCount[i] = prevVideoCap->currentCount[i];
 				}
-				++vidCapObj.frameCount;
-			}
+				++prevVideoCap->frameCount;
 
-			//----------------------------------------
-			// Display the video result and log window
-			//----------------------------------------
+				//----------------------------------------
+				// Display the video result and log window
+				//----------------------------------------
 
-			for (int mb = 0; mb < conf_batchSize; mb++)
-			{
-				vidCapObj.vw.write(frame[mb]);
+				prevVideoCap->vw.write(prev_frame);
 
 				int i = 0;
 				logs = Mat(logWinHeight, logWinWidth, CV_8UC1, Scalar(0));
@@ -734,13 +726,21 @@ int main(int argc, char **argv)
 				std::chrono::duration<float> frame_time = std::chrono::duration_cast<std::chrono::duration<float>>(end_time - start_time);
 				char vid_fps[20];
 				sprintf(vid_fps, "FPS: %.2f", 1 / frame_time.count());
-				cv::putText(frame[mb], string(vid_fps), cv::Point(10, vidCapObj.inputHeight - 10), cv::FONT_HERSHEY_SIMPLEX, 
-					    	0.5, cv::Scalar(255, 255, 255), 1, 8, false);
+				cv::putText(prev_frame, string(vid_fps), cv::Point(10, prevVideoCap->inputHeight - 10), cv::FONT_HERSHEY_SIMPLEX,
+							0.5, cv::Scalar(255, 255, 255), 1, 8, false);
 				char infTm[20];
+				if (!isAsyncMode)
+				{
+				// In the true async mode, there is no way to measure detection time directly
 				sprintf(infTm, "Infer time: %.3f", infer_time.count());
-				cv::putText(frame[mb], string(infTm), cv::Point(10, vidCapObj.inputHeight - 30), cv::FONT_HERSHEY_SIMPLEX, 
+				}
+				else
+				{
+				sprintf(infTm, "Infer time: N/A for Async mode");
+				}
+				cv::putText(prev_frame, string(infTm), cv::Point(10, prevVideoCap->inputHeight - 30), cv::FONT_HERSHEY_SIMPLEX,
 						0.5, cv::Scalar(255, 255, 255), 1, 8, false);
-				cv::imshow(vidCapObj.camName, frame[mb]);
+				cv::imshow(prevVideoCap->camName, prev_frame);
 				cv::imshow("Intruder Log", logs);
 				start_time = std::chrono::high_resolution_clock::now();
 
@@ -755,7 +755,13 @@ int main(int argc, char **argv)
 				}
 			}
 			++index;
+			if (isAsyncMode) {
+				currInfReq.swap(nextInfReq);
+				prev_frame = vidCapObj.frame.clone();
+				prevVideoCap = &vidCapObj;
+			}
 		}
+
 		// Press Esc to exit the application 
 		if (waitKey(1) == 27)
 		{
@@ -765,12 +771,11 @@ int main(int argc, char **argv)
 		// Check if all the videos have ended
 		if (find(noMoreData.begin(), noMoreData.end(), false) == noMoreData.end())
 			break;
+
 	}
 
 	// Save the JSON output
 	saveJSON(vidCaps[0].events, vidCaps[0]);
-	delete[] output_frames;
-	delete[] frame;
 	destroyAllWindows();
 	return 0;
 }

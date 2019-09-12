@@ -5,7 +5,7 @@ This web browser UI is not real-time, but uses the information processed  by the
 ## Running the UI
 Go to UI directory present in intruder-detector.
 ```
-cd UI
+cd <intruder-detector-cpp>/UI
 ```
 ### Install the dependencies
 ```

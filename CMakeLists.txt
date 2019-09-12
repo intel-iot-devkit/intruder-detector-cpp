@@ -42,10 +42,10 @@ else()
     message(STATUS "OPENCV is disabled or not found,  skiped")
     return()
 endif()
-
-include_directories(include)
-
-add_executable(intruder-detector src/main.cpp)
+include_directories(application/include)
+include_directories(json/single_include)
+include_directories(/opt/intel/openvino/deployment_tools/open_model_zoo/demos/common)
+add_executable(intruder-detector application/src/main.cpp)
 
 add_dependencies(intruder-detector IE::ie_cpu_extension)
 

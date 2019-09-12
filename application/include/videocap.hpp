@@ -33,7 +33,7 @@ static string conf_targetDevice;
 static string conf_modelPath;
 static string conf_binFilePath;
 static string conf_labelsFilePath;
-static const string conf_file = "../resources/conf.txt";
+static const string conf_file = "../resources/config.json";
 static const size_t conf_batchSize = 1;
 static const int conf_windowColumns = 2; // OpenCV windows per each row
 const int displayWindowWidth = 768;
@@ -44,7 +44,7 @@ static const int conf_fourcc = 0x00000021;
 
 static const double conf_thresholdValue = 0.55;
 static const int conf_candidateConfidence = 4;
-static std::vector<std::string> acceptedDevices{"CPU", "GPU", "MYRIAD", "HETERO:FPGA,CPU", "HETERO:HDDL,CPU"};
+static std::vector<std::string> acceptedDevices{"CPU", "GPU", "MYRIAD", "HETERO:FPGA,CPU", "HDDL"};
 
 typedef struct {
 	char time[25];
@@ -58,7 +58,7 @@ public:
 	size_t inputWidth;
 	size_t inputHeight;
 	const string inputVideo;
-
+	cv::Mat frame;
 	int noLabels; // Number of labels
 	vector<int> lastCorrectCount;
 	vector<int> totalCount;
@@ -89,8 +89,9 @@ public:
 		, inputHeight(inputHeight)
 		, inputVideo(inputVideo)
 		, vc(inputVideo.c_str())
+		, frame()
 		, camName(camName)
-		, videoName("../../UI/resources/videos/video" + to_string(number) + ".mp4") {
+		, videoName("../UI/resources/videos/video" + to_string(number+1) + ".mp4") {
 			if (!vc.isOpened())
 			{
 				std::cout << "Couldn't open video " << inputVideo << std::endl;
@@ -108,7 +109,7 @@ public:
 		, inputVideo("stream")
 		, vc(inputVideo)
 		, camName(camName)
-		, videoName("../../UI/resources/videos/video" + to_string(number) + ".mp4") {
+		, videoName("../UI/resources/videos/video" + to_string(number+1) + ".mp4") {
 			if (!vc.isOpened())
 			{
 				std::cout << "Couldn't open video " << inputVideo << std::endl;
