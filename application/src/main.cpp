@@ -49,6 +49,7 @@ using namespace cv;
 using namespace InferenceEngine::details;
 using namespace InferenceEngine;
 bool isAsyncMode = true;
+bool isUI = false;
 using json = nlohmann::json;
 json jsonobj;
 
@@ -83,6 +84,7 @@ void parseArgs(int argc, char **argv)
 					                "Default option is CPU\n"
 							" To run on multiple devices, use MULTI:<device1>,<device2>,<device3>\n"
 					"-f, --flag	execution on SYNC or ASYNC mode. Default option is ASYNC mode\n"
+					"-ui, --ui	Enable the Browser UI using true. Default option is false\n"
 					"-lp, --loop	Loop video to mimic continuous input\n";
 		exit(0);
 	}
@@ -120,6 +122,13 @@ void parseArgs(int argc, char **argv)
 				isAsyncMode = false;
 			else
 				isAsyncMode = true;
+		}
+		if ("-ui" == std::string(argv[i]) || "--ui" == std::string(argv[i]))
+		{
+			if (std::string(argv[i + 1]) == "true")
+				isUI = true;
+			else
+				isUI = false;
 		}
 	}
 }
@@ -368,7 +377,6 @@ int main(int argc, char **argv)
 	parseEnv();
 	parseArgs(argc, argv);
 	checkArgs();
-
 	std::ifstream confFile(conf_file);
 	if (!confFile.is_open())
 	{
@@ -481,6 +489,7 @@ int main(int argc, char **argv)
 	{
 		vidCapObj.inputWidth = vidCapObj.vc.get(cv::CAP_PROP_FRAME_WIDTH);
 		vidCapObj.inputHeight = vidCapObj.vc.get(cv::CAP_PROP_FRAME_HEIGHT);
+		if(isUI  && !(loopVideos))
 		if (!(vidCapObj.initVW(vidCapObj.inputHeight, vidCapObj.inputWidth)))
 		{
 			cout << "Could not open " << vidCapObj.videoName << " for writing\n";
@@ -712,9 +721,8 @@ int main(int argc, char **argv)
 				//----------------------------------------
 				// Display the video result and log window
 				//----------------------------------------
-
-				prevVideoCap->vw.write(prev_frame);
-
+				if(isUI  && !(loopVideos))
+					prevVideoCap->vw.write(prev_frame);
 				int i = 0;
 				logs = Mat(logWinHeight, logWinWidth, CV_8UC1, Scalar(0));
 				for (list<string>::iterator it = logList.begin(); it != logList.end(); ++it)
