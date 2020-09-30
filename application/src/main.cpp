@@ -33,15 +33,15 @@
 #include "opencv2/video/video.hpp"
 
 #include <ie_icnn_net_reader.h>
-#include <ie_device.hpp>
+//#include <ie_device.hpp>
 #include <ie_plugin_config.hpp>
 #include <ie_plugin_dispatcher.hpp>
 #include <ie_plugin_ptr.hpp>
 #include <inference_engine.hpp>
 #include <samples/ocv_common.hpp>
 #include <samples/slog.hpp>
-#include <ie_extension.h>
-#include <ext_list.hpp>
+//#include <ie_extension.h>
+//#include <ext_list.hpp>
 #include <nlohmann/json.hpp>
 #include <videocap.hpp>
 
@@ -163,24 +163,6 @@ void checkArgs()
 		std::cout << "Unsupported device " << conf_targetDevice << std::endl;
 		exit(13);
 	}
-}
-
-
-static void configureNetwork(InferenceEngine::CNNNetReader &network)
-{
-	try
-	{
-		network.ReadNetwork(conf_modelPath);
-	}
-	catch (InferenceEngineException ex)
-	{
-		std::cerr << "Failed to load network: " << std::endl;
-	}
-
-	network.ReadWeights(conf_binFilePath);
-
-	// Set batch size
-	network.getNetwork().setBatchSize(conf_batchSize);
 }
 
 
@@ -387,23 +369,24 @@ int main(int argc, char **argv)
 	// Inference engine initialization
 	Core ie;
 
-	InferenceEngine::CNNNetReader network;
+	auto network = ie.ReadNetwork(conf_modelPath);
 
-	// Configure the network
-	configureNetwork(network);
-	if ((conf_targetDevice.find("CPU") != std::string::npos))
-	{
+        network.setBatchSize(conf_batchSize);
+
+	// if ((conf_targetDevice.find("CPU") != std::string::npos))
+	// {
 		// Required for support of certain layers in CPU
-		ie.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>(), "CPU");
-	}
-	InputsDataMap inputInfo(network.getNetwork().getInputsInfo());
+		//ie.AddExtension(std::make_shared<Extensions::Cpu::CpuExtensions>(), "CPU");
+	// }
+
+	InputsDataMap inputInfo(network.getInputsInfo());
 
 	std::string imageInputName, imageInfoInputName;
 	size_t netInputHeight, netInputWidth, netInputChannel;
 
 	for (const auto & inputInfoItem : inputInfo)
 	{
-	if (inputInfoItem.second->getTensorDesc().getDims().size() == 4)
+	if (inputInfoItem.second->getInputData()->getTensorDesc().getDims().size() == 4)
 	{  // first input contains images
 	    imageInputName = inputInfoItem.first;
 	    inputInfoItem.second->setPrecision(Precision::U8);
@@ -427,13 +410,13 @@ int main(int argc, char **argv)
 	}
 	}
 
-	OutputsDataMap outputInfo(network.getNetwork().getOutputsInfo());
+	OutputsDataMap outputInfo(network.getOutputsInfo());
 	if (outputInfo.size() != 1) {
 	throw std::logic_error("This demo accepts networks having only one output");
 	}
 	DataPtr& output = outputInfo.begin()->second;
 	auto outputName = outputInfo.begin()->first;
-	const int num_classes = network.getNetwork().getLayerByName(outputName.c_str())->GetParamAsInt("num_classes");
+
 	const SizeVector outputDims = output->getTensorDesc().getDims();
 	const int maxProposalCount = outputDims[2];
 
@@ -450,7 +433,7 @@ int main(int argc, char **argv)
 
 	// --------------------------- 4. Loading model to the device ------------------------------------------
 	slog::info << "Loading model to the device" << slog::endl;
-	ExecutableNetwork net = ie.LoadNetwork(network.getNetwork(), conf_targetDevice);
+	ExecutableNetwork net = ie.LoadNetwork(network, conf_targetDevice);
 	// -----------------------------------------------------------------------------------------------------
 
 	// --------------------------- 5. Create infer request -------------------------------------------------
@@ -736,7 +719,7 @@ int main(int argc, char **argv)
 				sprintf(vid_fps, "FPS: %.2f", 1 / frame_time.count());
 				cv::putText(prev_frame, string(vid_fps), cv::Point(10, prevVideoCap->inputHeight - 10), cv::FONT_HERSHEY_SIMPLEX,
 							0.5, cv::Scalar(255, 255, 255), 1, 8, false);
-				char infTm[20];
+				char infTm[100];
 				if (!isAsyncMode)
 				{
 				// In the true async mode, there is no way to measure detection time directly

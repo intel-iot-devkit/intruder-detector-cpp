@@ -44,12 +44,12 @@ else()
 endif()
 include_directories(application/include)
 include_directories(json/single_include)
-include_directories(/opt/intel/openvino/deployment_tools/open_model_zoo/demos/common)
+include_directories(/opt/intel/openvino_2020.3.194/deployment_tools/open_model_zoo/demos/common)
 add_executable(intruder-detector application/src/main.cpp)
 
-add_dependencies(intruder-detector IE::ie_cpu_extension)
+#add_dependencies(intruder-detector)
 
-target_link_libraries(intruder-detector pthread rt dl ${OpenCV_LIBRARIES} IE::ie_cpu_extension ${InferenceEngine_LIBRARIES})
+target_link_libraries(intruder-detector pthread rt dl ${OpenCV_LIBRARIES} ${InferenceEngine_LIBRARIES})
 
 
 

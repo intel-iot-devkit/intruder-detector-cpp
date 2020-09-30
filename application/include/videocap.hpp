@@ -40,7 +40,7 @@ const int displayWindowWidth = 768;
 const int displayWindowHeight = 432;
 bool loopVideos = false;
 
-static const int conf_fourcc = 0x00000021; 
+static const int conf_fourcc = 0x31637661;
 
 static const double conf_thresholdValue = 0.55;
 static const int conf_candidateConfidence = 4;

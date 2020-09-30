@@ -2,7 +2,7 @@
 
 | Details           |          |
 |-----------------------|-----------|
-| Target OS:            |  Ubuntu\* 16.04  |
+| Target OS:            |  Ubuntu\* 18.04  |
 | Programming Language: |  C++      |
 | Time to Complete:    |  50-70min |
 
@@ -19,14 +19,14 @@ This reference implementation detect the objects in a designated area. It gives 
 * 6th to 8th Generation Intel® Core™ processors with Intel® Iris® Pro graphics or Intel® HD Graphics
 
 ### Software
-* [Ubuntu\* 16.04 LTS](http://releases.ubuntu.com/16.04/)<br>
+* [Ubuntu\* 18.04 LTS](http://releases.ubuntu.com/18.04/)<br>
    **Note**: Use kernel versions 4.14+ with this software.<br> 
     Determine the kernel version with the uname command. 
     ```
     uname -a
     ```
 * OpenCL™ Runtime Package
-* Intel® Distribution of OpenVINO™ toolkit 2019 R3 Release
+* Intel® Distribution of OpenVINO™ toolkit 2020 R3 Release
 
 ## How it Works
 The application uses the Inference Engine included in the Intel® Distribution of OpenVINO™ toolkit. A trained neural network detects objects within a designated area by displaying a green bounding box over them, and registers them in a logging system.
@@ -54,7 +54,7 @@ FFmpeg is a free and open-source project capable of recording, converting and st
 
 ### Which Models to Use
 
-This application uses the **[person-vehicle-bike-detection-crossroad-0078](https://docs.openvinotoolkit.org/2019_R3/_models_intel_person_vehicle_bike_detection_crossroad_0078_description_person_vehicle_bike_detection_crossroad_0078.html)** Intel® model, that can be downloaded using the **model downloader**. The **model downloader** downloads the __.xml__ and __.bin__ files that is used by the application.
+This application uses the **[person-vehicle-bike-detection-crossroad-0078](https://docs.openvinotoolkit.org/latest/omz_models_intel_person_vehicle_bike_detection_crossroad_0078_description_person_vehicle_bike_detection_crossroad_0078.html)** Intel® model, that can be downloaded using the **model downloader**. The **model downloader** downloads the __.xml__ and __.bin__ files that is used by the application.
 
 The application also works with any object-detection model, provided it has the same input and output format of the SSD model.
 The model can be any object detection model:
@@ -214,6 +214,7 @@ To run on the HDDL, use the `-d HDDL ` command-line argument:
 ```
 **Note:** The HDDL-R can only run on FP16 models. The model that is passed to the application, through the `-m <path_to_model>` command-line argument, must be of data type FP16.
 
+<!--
 #### Run on the Intel® Arria® 10 FPGA
 
 Before running the application on the FPGA, set the environment variables and  program the AOCX (bitstream) file.<br>
@@ -250,6 +251,7 @@ To run the application on the FPGA with floating point precision 16 (FP16), use 
 ```
 ./intruder-detector -l ../resources/labels.txt -m /opt/intel/openvino/deployment_tools/open_model_zoo/tools/downloader/intel/person-vehicle-bike-detection-crossroad-0078/FP16/person-vehicle-bike-detection-crossroad-0078.xml -d HETERO:FPGA,CPU
 ```
+-->
 
 ### Loop the input video 
 By default, the application reads the input videos only once, and ends when the videos end.
